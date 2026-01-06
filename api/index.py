@@ -1,12 +1,15 @@
 from http.server import BaseHTTPRequestHandler
 import json
 import os
+import base64
+import io
+from PIL import Image
 from google import genai
+from google.genai import types
 
 class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         # 1. SECURITY CHECK
-        # We check if the incoming request has the correct password header
         server_secret = os.environ.get("PROXY_SECRET")
         client_secret = self.headers.get("Authorization")
 
@@ -16,7 +19,7 @@ class handler(BaseHTTPRequestHandler):
             self.wfile.write(b"Forbidden: Wrong Proxy Password")
             return
 
-        # 2. Parse Incoming Request
+        # 2. Parse Incoming JSON
         try:
             content_length = int(self.headers['Content-Length'])
             post_data = self.rfile.read(content_length)
@@ -27,40 +30,43 @@ class handler(BaseHTTPRequestHandler):
             self.wfile.write(b"Error: Bad JSON")
             return
 
-        # 3. Get Google API Key from Vercel Environment
+        # 3. Setup Google Client
         google_key = os.environ.get("GOOGLE_API_KEY")
-        if not google_key:
-            self.send_response(500)
-            self.end_headers()
-            self.wfile.write(b"Error: GOOGLE_API_KEY not set in Vercel")
-            return
-
-        # 4. Handle The Request (Text or Image?)
-        # We look for a 'mode' in the body to decide what to do
-        mode = body.get("mode", "text")
-        prompt = body.get("prompt", "")
-        
         client = genai.Client(api_key=google_key)
 
+        # 4. Handle Request Modes
+        mode = body.get("mode", "text")
+        prompt = body.get("prompt", "")
+        input_images_b64 = body.get("images", []) # List of base64 strings
+
         try:
-            if mode == "text":
-                # Text Generation (Gemini 2.0 Flash)
-                response = client.models.generate_content(
-                    model="gemini-flash-latest", 
-                    contents=prompt
-                )
-                output = {"result": response.text}
+            # PREPARE CONTENT (Text + Images)
+            contents = [prompt]
             
-            else:
-                # Placeholder for Image logic (we will add this next!)
-                output = {"result": "Image mode not implemented yet"}
+            # Convert incoming Base64 strings back to PIL Images for Google
+            for b64_str in input_images_b64:
+                img_data = base64.b64decode(b64_str)
+                img = Image.open(io.BytesIO(img_data))
+                contents.append(img)
 
-            # 5. Send Result Back
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps(output).encode('utf-8'))
-
-        except Exception as e:
-            self.send_response(500)
-            self.wfile.write(str(e).encode('utf-8'))
+            if mode == "text":
+                # TEXT GEN (Stats, Dex)
+                response = client.models.generate_content(
+                    model="gemini-1.5-flash", # Or gemini-flash-latest
+                    contents=contents
+                )
+                output = {"result": response.text, "type": "text"}
+            
+            elif mode == "image":
+                # IMAGE GEN (Fusion)
+                response = client.models.generate_content(
+                    model="gemini-2.5-flash-image",
+                    contents=contents,
+                    config=types.GenerateContentConfig(response_modalities=["IMAGE"])
+                )
+                
+                # Extract Image and Convert to Base64 to send back to Germany
+                generated_img = response.candidates[0].content.parts[0].as_image()
+                buffered = io.BytesIO()
+                generated_img.save(buffered, format="PNG")
+                img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
