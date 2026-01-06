@@ -46,7 +46,7 @@ class handler(BaseHTTPRequestHandler):
             if mode == "text":
                 # Text Generation (Gemini 2.0 Flash)
                 response = client.models.generate_content(
-                    model="gemini-2.0-flash", 
+                    model="gemini-flash-latest", 
                     contents=prompt
                 )
                 output = {"result": response.text}
