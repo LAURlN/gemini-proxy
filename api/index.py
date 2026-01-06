@@ -10,8 +10,8 @@ from google.genai import types
 
 app = Flask(__name__)
 
-# CONFIG: Updated URL for 2026
-HF_MODEL_URL = "https://router.huggingface.co/models/black-forest-labs/FLUX.1-schnell"
+# CONFIG: Switching to SDXL because it is 100% reliable on Free Tier
+HF_MODEL_URL = "https://router.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
 
 @app.route('/api', methods=['POST'])
 def proxy_handler():
@@ -34,9 +34,6 @@ def proxy_handler():
         # 3. TEXT MODE -> Google Gemini (Free)
         if mode == "text":
             google_key = os.environ.get("GOOGLE_API_KEY")
-            if not google_key:
-                return jsonify({"error": "Server missing GOOGLE_API_KEY"}), 500
-
             client = genai.Client(api_key=google_key)
             
             contents = [prompt]
@@ -54,25 +51,25 @@ def proxy_handler():
             )
             return jsonify({"result": response.text, "type": "text"})
 
-        # 4. IMAGE MODE -> Hugging Face (FLUX.1-schnell)
+        # 4. IMAGE MODE -> Hugging Face (SDXL)
         elif mode == "image":
             hf_token = os.environ.get("HF_API_TOKEN")
             if not hf_token:
                 return jsonify({"error": "Server missing HF_API_TOKEN"}), 500
 
-            # Enhance prompt for Pokemon Pixel Art
-            enhanced_prompt = f"pixel art pokemon sprite, {prompt}, white background, gameboy advance style, clean lines, high quality, sprite sheet aesthetic"
+            # Enhance prompt specifically for SDXL Pixel Art
+            enhanced_prompt = f"pixel art pokemon sprite, {prompt}, white background, flat color, gameboy advance style, 2d, clean lines, no blur"
             
             headers = {"Authorization": f"Bearer {hf_token}"}
             payload = {"inputs": enhanced_prompt}
 
-            # Call Hugging Face API (New Router URL)
-            resp = requests.post(HF_MODEL_URL, headers=headers, json=payload, timeout=50)
+            # Call Hugging Face API
+            resp = requests.post(HF_MODEL_URL, headers=headers, json=payload, timeout=60)
 
             if resp.status_code != 200:
-                # Handle "Model Loading" error (Cold Start)
+                # Handle Cold Start
                 if "loading" in resp.text.lower():
-                    return jsonify({"error": "HF Model is loading (Cold Start). Please wait 30s and try again."}), 503
+                    return jsonify({"error": "HF Model is loading. Please wait 30s and try again."}), 503
                 return jsonify({"error": f"HuggingFace Error: {resp.text}"}), 500
 
             # HF returns raw binary image bytes
