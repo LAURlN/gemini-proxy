@@ -60,7 +60,7 @@ def proxy_handler():
                 # Using the standard Imagen 3 Fast model
                 # If you specifically have access to 'imagen-4.0', change the string below.
                 response = client.models.generate_images(
-                    model='imagen-3.0-generate-001', 
+                    model='imagen-4.0-generate-001', 
                     prompt=enhanced_prompt,
                     config=types.GenerateImagesConfig(
                         number_of_images=1,
