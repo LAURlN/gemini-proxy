@@ -2,16 +2,11 @@ from flask import Flask, request, jsonify
 import os
 import base64
 import io
-import requests
-import random
 from PIL import Image
 from google import genai
 from google.genai import types
 
 app = Flask(__name__)
-
-# CONFIG: Switching to SDXL because it is 100% reliable on Free Tier
-HF_MODEL_URL = "https://router.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
 
 @app.route('/api', methods=['POST'])
 def proxy_handler():
@@ -31,12 +26,16 @@ def proxy_handler():
         prompt = data.get("prompt", "")
         input_images_b64 = data.get("images", [])
 
-        # 3. TEXT MODE -> Google Gemini (Free)
+        # 3. Setup Client (Uses your NEW Paid Key from Vercel Env)
+        google_key = os.environ.get("GOOGLE_API_KEY")
+        if not google_key:
+            return jsonify({"error": "Server missing GOOGLE_API_KEY"}), 500
+        client = genai.Client(api_key=google_key)
+
+        # 4. TEXT MODE (Stats, Dex)
         if mode == "text":
-            google_key = os.environ.get("GOOGLE_API_KEY")
-            client = genai.Client(api_key=google_key)
-            
             contents = [prompt]
+            # Decode reference images if sent
             for b64 in input_images_b64:
                 try:
                     img_bytes = base64.b64decode(b64)
@@ -51,39 +50,42 @@ def proxy_handler():
             )
             return jsonify({"result": response.text, "type": "text"})
 
-        # 4. IMAGE MODE -> Hugging Face (SDXL)
+        # 5. IMAGE MODE (Fusion - Nano Banana)
         elif mode == "image":
-            hf_token = os.environ.get("HF_API_TOKEN")
-            if not hf_token:
-                return jsonify({"error": "Server missing HF_API_TOKEN"}), 500
+            contents = []
+            # Decode Parent Sprites (Crucial for Fusion!)
+            for b64 in input_images_b64:
+                try:
+                    img_bytes = base64.b64decode(b64)
+                    img = Image.open(io.BytesIO(img_bytes))
+                    contents.append(img)
+                except Exception as e:
+                    print(f"Image decode error: {e}")
 
-            # Enhance prompt specifically for SDXL Pixel Art
-            enhanced_prompt = f"pixel art pokemon sprite, {prompt}, white background, flat color, gameboy advance style, 2d, clean lines, no blur"
+            contents.append(prompt)
+
+            # CALL GEMINI 2.5 FLASH IMAGE (The Paid Model)
+            response = client.models.generate_content(
+                model="gemini-2.5-flash-image",
+                contents=contents,
+                config=types.GenerateContentConfig(response_modalities=["IMAGE"])
+            )
             
-            headers = {"Authorization": f"Bearer {hf_token}"}
-            payload = {"inputs": enhanced_prompt}
-
-            # Call Hugging Face API
-            resp = requests.post(HF_MODEL_URL, headers=headers, json=payload, timeout=60)
-
-            if resp.status_code != 200:
-                # Handle Cold Start
-                if "loading" in resp.text.lower():
-                    return jsonify({"error": "HF Model is loading. Please wait 30s and try again."}), 503
-                return jsonify({"error": f"HuggingFace Error: {resp.text}"}), 500
-
-            # HF returns raw binary image bytes
-            img_bytes = resp.content
+            # Extract Image
+            generated_img = response.candidates[0].content.parts[0].as_image()
             
             # Convert to Base64
-            img_b64 = base64.b64encode(img_bytes).decode("utf-8")
-            return jsonify({"result": img_b64, "type": "image"})
+            buffered = io.BytesIO()
+            generated_img.save(buffered, format="PNG")
+            img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
+            
+            return jsonify({"result": img_str, "type": "image"})
 
         else:
             return jsonify({"error": f"Unknown mode: {mode}"}), 400
 
     except Exception as e:
-        return jsonify({"error": f"INTERNAL ERROR: {str(e)}"}), 500
+        return jsonify({"error": f"INTERNAL SERVER ERROR: {str(e)}"}), 500
 
 if __name__ == "__main__":
     app.run()
