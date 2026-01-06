@@ -3,11 +3,15 @@ import os
 import base64
 import io
 import requests
+import random
 from PIL import Image
 from google import genai
 from google.genai import types
 
 app = Flask(__name__)
+
+# CONFIG: We use FLUX.1-schnell because it is FAST and high quality
+HF_MODEL_URL = "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell"
 
 @app.route('/api', methods=['POST'])
 def proxy_handler():
@@ -27,14 +31,14 @@ def proxy_handler():
         prompt = data.get("prompt", "")
         input_images_b64 = data.get("images", [])
 
-        # Setup Google Client
-        google_key = os.environ.get("GOOGLE_API_KEY")
-        if not google_key:
-            return jsonify({"error": "Server missing GOOGLE_API_KEY"}), 500
-        client = genai.Client(api_key=google_key)
-
-        # 3. TEXT MODE -> Gemini Flash (Free)
+        # 3. TEXT MODE -> Google Gemini (Free)
         if mode == "text":
+            google_key = os.environ.get("GOOGLE_API_KEY")
+            if not google_key:
+                return jsonify({"error": "Server missing GOOGLE_API_KEY"}), 500
+
+            client = genai.Client(api_key=google_key)
+            
             contents = [prompt]
             for b64 in input_images_b64:
                 try:
@@ -50,45 +54,40 @@ def proxy_handler():
             )
             return jsonify({"result": response.text, "type": "text"})
 
-        # 4. IMAGE MODE -> Google Imagen (Trying for Free Tier)
+        # 4. IMAGE MODE -> Hugging Face (Free)
         elif mode == "image":
-            # Note: Imagen is Text-to-Image only. It ignores reference images.
-            # We enhance the prompt to ensure pixel art style.
-            enhanced_prompt = f"pixel art pokemon sprite, {prompt}, white background, gameboy advance style, high quality sprite"
+            hf_token = os.environ.get("HF_API_TOKEN")
+            if not hf_token:
+                return jsonify({"error": "Server missing HF_API_TOKEN"}), 500
 
-            try:
-                # Using the standard Imagen 3 Fast model
-                # If you specifically have access to 'imagen-4.0', change the string below.
-                response = client.models.generate_images(
-                    model='imagen-4.0-generate-001', 
-                    prompt=enhanced_prompt,
-                    config=types.GenerateImagesConfig(
-                        number_of_images=1,
-                    )
-                )
-                
-                # Extract Image
-                generated_image = response.generated_images[0].image
-                
-                # Convert to Base64 to send back to Germany
-                buffered = io.BytesIO()
-                generated_image.save(buffered, format="PNG")
-                img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
-                
-                return jsonify({"result": img_str, "type": "image"})
-                
-            except Exception as e:
-                # Capture the specific Google API error (like Limit 0)
-                error_msg = str(e)
-                if "429" in error_msg or "quota" in error_msg.lower():
-                    return jsonify({"error": "QUOTA_ERROR: Imagen is not free on this account. Try Pollinations again?"}), 500
-                return jsonify({"error": f"Google Imagen Error: {error_msg}"}), 500
+            # Enhance prompt for Pokemon Pixel Art
+            # FLUX listens to natural language well
+            enhanced_prompt = f"pixel art pokemon sprite, {prompt}, white background, gameboy advance style, clean lines, high quality, sprite sheet aesthetic"
+            
+            headers = {"Authorization": f"Bearer {hf_token}"}
+            payload = {"inputs": enhanced_prompt}
+
+            # Call Hugging Face API
+            resp = requests.post(HF_MODEL_URL, headers=headers, json=payload, timeout=50)
+
+            if resp.status_code != 200:
+                # Handle "Model Loading" error (common on free tier)
+                if "loading" in resp.text.lower():
+                    return jsonify({"error": "HF Model is loading (Cold Start). Try again in 30 seconds."}), 503
+                return jsonify({"error": f"HuggingFace Error: {resp.text}"}), 500
+
+            # HF returns raw binary image bytes
+            img_bytes = resp.content
+            
+            # Convert to Base64
+            img_b64 = base64.b64encode(img_bytes).decode("utf-8")
+            return jsonify({"result": img_b64, "type": "image"})
 
         else:
             return jsonify({"error": f"Unknown mode: {mode}"}), 400
 
     except Exception as e:
-        return jsonify({"error": f"INTERNAL PYTHON ERROR: {str(e)}"}), 500
+        return jsonify({"error": f"INTERNAL ERROR: {str(e)}"}), 500
 
 if __name__ == "__main__":
     app.run()
