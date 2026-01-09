@@ -31,7 +31,7 @@ def proxy_handler():
             return jsonify({"error": "Server missing GOOGLE_API_KEY"}), 500
         client = genai.Client(api_key=google_key)
 
-        # 4. TEXT MODE (The only thing this proxy does now)
+        # 4. TEXT MODE (The only thing this proxy does now!)
         if mode == "text":
             # Prepare contents: [Prompt, Image1, Image2, ...]
             contents = [prompt]
